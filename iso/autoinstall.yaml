@@ -1,0 +1,57 @@
+#cloud-config
+# Ubuntu autoinstall config for box — rendered by iso/build-iso.sh, which
+# fills in the @@PLACEHOLDERS@@. The installer asks for confirmation on screen
+# before it ERASES THE LARGEST DISK and installs Ubuntu on btrfs (UEFI).
+# box itself is set up on first boot by box-firstboot.service.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+  timezone: "@@TIMEZONE@@"
+  identity:
+    hostname: "@@HOSTNAME@@"
+    username: "@@USER@@"
+    password: "@@PASSWORD_HASH@@"
+  ssh:
+    install-server: true
+    allow-pw: true
+  source:
+    id: ubuntu-server-minimal
+  storage:
+    swap:
+      size: 0
+    config:
+      - {type: disk, id: disk0, match: {size: largest}, ptable: gpt, wipe: superblock-recursive, preserve: false, grub_device: false}
+      - {type: partition, id: esp, device: disk0, number: 1, size: 1G, flag: boot, grub_device: true, wipe: superblock, preserve: false}
+      - {type: format, id: esp-fs, volume: esp, fstype: fat32, preserve: false}
+      - {type: partition, id: rootpart, device: disk0, number: 2, size: -1, wipe: superblock, preserve: false}
+      - {type: format, id: root-fs, volume: rootpart, fstype: btrfs, preserve: false}
+      - {type: mount, id: root-mnt, device: root-fs, path: /}
+      - {type: mount, id: esp-mnt, device: esp-fs, path: /boot/efi}
+  packages:
+    - curl
+    - git
+    - ca-certificates
+  late-commands:
+    - |
+      cat > /target/etc/systemd/system/box-firstboot.service <<'UNIT'
+      [Unit]
+      Description=box first-boot setup (log: /var/log/box.log)
+      Wants=network-online.target
+      After=network-online.target
+      ConditionPathExists=!/var/lib/box/firstboot-done
+
+      [Service]
+      Type=oneshot
+      TimeoutStartSec=0
+      @@BOX_ENV@@
+      ExecStart=/bin/bash -c 'curl -fsSL https://raw.githubusercontent.com/boxlx/box/$${BOX_REF}/install.sh | bash'
+      ExecStartPost=/bin/sh -c 'mkdir -p /var/lib/box && touch /var/lib/box/firstboot-done && sed -i "/BOX_TAILSCALE_AUTHKEY/d" /etc/systemd/system/box-firstboot.service'
+      StandardOutput=journal+console
+
+      [Install]
+      WantedBy=multi-user.target
+      UNIT
+    - curtin in-target -- systemctl enable box-firstboot.service
+  shutdown: reboot

@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+# box — manage a box dev machine. Run `box help`.
+set -euo pipefail
+
+_self=$(readlink -f "${BASH_SOURCE[0]}")
+export BOX_ROOT="${BOX_ROOT:-$(dirname "$(dirname "$_self")")}"
+# shellcheck source=lib/common.sh
+. "$BOX_ROOT/lib/common.sh"
+
+usage() {
+  cat <<EOF
+box $BOX_VERSION — a minimal remote coding machine you shape with AI.
+
+Usage: box <command> [args]
+
+  status                 what's installed and running (default)
+  apply                  make the machine match /etc/box/box.conf      [root]
+  update                 update box, the OS, languages and agents      [root]
+
+  modules                list modules (installed ones are marked)
+  add <module>...        install modules and record them in box.conf   [root]
+  remove <module>...     uninstall modules (data is kept)              [root]
+
+  config                 print /etc/box/box.conf
+  config set KEY VALUE   change one setting (then run: sudo box apply) [root]
+  config edit            open box.conf in \$EDITOR                      [root]
+
+  snapshot [note]        record a restore point                       [root]
+  snapshots              list restore points                          [root]
+
+  version                print the box version
+  help                   this help
+
+Docs for agents and humans: /etc/box/AGENTS.md
+EOF
+}
+
+start_log() {
+  touch "$BOX_LOG" && chmod 640 "$BOX_LOG"
+  exec > >(tee -a "$BOX_LOG") 2>&1
+  printf '\n----- %s box %s %s -----\n' "$(date -Is)" "$BOX_VERSION" "$*" >>"$BOX_LOG"
+}
+
+# --- apply ------------------------------------------------------------------
+
+run_core() {
+  local f name
+  for f in "$BOX_ROOT"/core/[0-9]*.sh; do
+    name=$(basename "$f" .sh)
+    step "${name#*-}"
+    local t0=$SECONDS
+    run_script "$f" || die "core step '$name' failed — see the output above (full log: $BOX_LOG)"
+    printf '  %s(%ss)%s\n' "$_c_dim" "$((SECONDS - t0))" "$_c_reset"
+  done
+}
+
+apply_modules() {
+  [[ -n $BOX_MODULES ]] || return 0
+  step "modules"
+  local m path
+  for m in $BOX_MODULES; do
+    path=$(module_path "$m") || { warn "module '$m' not found — skipping (see: box modules)"; continue; }
+    if run_script "$path" module_check >/dev/null 2>&1; then
+      ok "$m"
+    else
+      run_script "$path" module_install || die "module '$m' failed to install"
+      ok "$m installed"
+    fi
+  done
+}
+
+cmd_apply() {
+  need_root apply
+  os_check
+  config_require
+  config_load
+  start_log apply
+  log "box $BOX_VERSION on $BOX_OS_NAME — applying $BOX_CONF"
+  mkdir -p "$BOX_STATE"
+  snapshot_create "before apply"
+  run_core
+  config_load # a step may have been the first to create files we read
+  apply_modules
+  snapshot_create "after apply"
+  date -Is >"$BOX_STATE/last-apply"
+  printf '\n'
+  cmd_status || true
+  next_steps
+}
+
+next_steps() {
+  local ts_ok=no host
+  host=$(hostname)
+  if command -v tailscale >/dev/null && [[ "$(tailscale status --json 2>/dev/null | jq -r '.BackendState // empty' 2>/dev/null)" == Running ]]; then
+    ts_ok=yes
+    host=$(tailscale status --json | jq -r '.Self.DNSName // empty' | sed 's/\.$//')
+    [[ -n $host ]] || host=$(tailscale ip -4 | head -n1)
+  fi
+  printf '\n%sNext%s\n' "$_c_bold" "$_c_reset"
+  if [[ $ts_ok == no ]]; then
+    printf '  1. Join your tailnet:   sudo tailscale up\n'
+  fi
+  printf '  • Connect:              ssh %s@%s   (or mosh)\n' "$BOX_USER" "$host"
+  printf '  • Start an agent:       claude · codex · opencode   (inside tmux, so it survives disconnects)\n'
+  printf '  • Make it yours:        ask your agent — it reads /etc/box/AGENTS.md\n'
+}
+
+# --- status -----------------------------------------------------------------
+
+_status_bad=0
+row() { # LEVEL LABEL TEXT
+  local mark
+  case $1 in
+    ok) mark="$_c_green✓$_c_reset" ;;
+    warn) mark="$_c_yellow!$_c_reset" ;;
+    *) mark="$_c_red✗$_c_reset"; _status_bad=1 ;;
+  esac
+  printf '  %s %-10s %s\n' "$mark" "$2" "$3"
+}
+
+cmd_status() {
+  local short=no
+  [[ ${1:-} == --short ]] && short=yes
+  os_load
+  config_load
+  _status_bad=0
+
+  printf '%sbox %s%s · %s · %s · user %s\n' "$_c_bold" "$BOX_VERSION" "$_c_reset" "$BOX_OS_NAME" "$(hostname)" "$BOX_USER"
+
+  if svc_active ssh.service || svc_active ssh.socket; then row ok ssh "running"
+  elif has_systemd; then row bad ssh "not running"
+  else row warn ssh "unknown (no systemd)"; fi
+
+  if ! command -v tailscale >/dev/null; then
+    row bad tailscale "not installed"
+  else
+    local st ip name
+    st=$(tailscale status --json 2>/dev/null | jq -r '.BackendState // "Stopped"' 2>/dev/null || echo Stopped)
+    if [[ $st == Running ]]; then
+      ip=$(tailscale ip -4 2>/dev/null | head -n1)
+      name=$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // ""' | sed 's/\.$//')
+      row ok tailscale "$ip  $name"
+    else
+      row warn tailscale "not connected — run: sudo tailscale up"
+    fi
+  fi
+
+  if [[ $BOX_DOCKER != yes ]]; then row warn docker "disabled"
+  elif ! command -v docker >/dev/null; then row bad docker "not installed"
+  elif svc_active docker; then row ok docker "$(docker --version | awk '{print $3}' | tr -d ,)"
+  else row warn docker "installed, daemon not running"; fi
+
+  if [[ $BOX_FIREWALL != yes ]]; then row warn firewall "disabled"
+  elif grep -qs '^ENABLED=yes' /etc/ufw/ufw.conf; then row ok firewall "ufw on"
+  else row warn firewall "ufw off"; fi
+
+  if snapper_ready; then row ok snapshots "btrfs + /etc history"
+  elif [[ -d /etc/.git ]]; then row ok snapshots "/etc history (no btrfs)"
+  else row warn snapshots "none"; fi
+
+  [[ $short == yes ]] && { printf '  %s→ box status · /etc/box/AGENTS.md%s\n' "$_c_dim" "$_c_reset"; return 0; }
+
+  local tools
+  tools=$(as_user mise ls --global --current --json 2>/dev/null |
+    jq -r 'to_entries[] | select(.key | startswith("npm:") | not) | "\(.key) \(.value[0].version)"' 2>/dev/null |
+    paste -sd, - | sed 's/,/, /g' || true)
+  if [[ -n $tools ]]; then row ok langs "$tools"
+  elif [[ -n $BOX_LANGS ]]; then row warn langs "can't read mise for $BOX_USER (run as root or $BOX_USER)"; fi
+
+  local a v out=()
+  for a in $BOX_AGENTS; do
+    if v=$(as_user timeout 10 "$a" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+[0-9.]*' | head -n1) && [[ -n $v ]]; then
+      out+=("$a $v")
+    else
+      out+=("$a ✗")
+      _status_bad=1
+    fi
+  done
+  ((${#out[@]})) && row ok agents "$(IFS=,; printf '%s' "${out[*]}" | sed 's/,/, /g')"
+
+  local m mods=() path
+  for m in $BOX_MODULES; do
+    if path=$(module_path "$m") && run_script "$path" module_check >/dev/null 2>&1; then mods+=("$m ✓")
+    else mods+=("$m ✗"); _status_bad=1; fi
+  done
+  ((${#mods[@]})) && row ok modules "$(IFS=,; printf '%s' "${mods[*]}" | sed 's/,/, /g')"
+
+  [[ -f $BOX_STATE/last-apply ]] && printf '  %slast apply: %s%s\n' "$_c_dim" "$(cat "$BOX_STATE/last-apply")" "$_c_reset"
+  return "$_status_bad"
+}
+
+# --- modules ----------------------------------------------------------------
+
+cmd_modules() {
+  config_load
+  local m mark src
+  while IFS= read -r m; do
+    mark=" "
+    list_has "$m" "$BOX_MODULES" && mark="$_c_green●$_c_reset"
+    src=""
+    [[ "$(module_path "$m")" == "$BOX_ETC"/* ]] && src=" ${_c_dim}(local)$_c_reset"
+    printf '  %s %-14s %s%s\n' "$mark" "$m" "$(module_desc "$m")" "$src"
+  done < <(module_names)
+  printf '\n  ● = in BOX_MODULES.  Add: sudo box add <name>   Write your own: /etc/box/modules/<name>.sh\n'
+}
+
+cmd_add() {
+  need_root add
+  (($#)) || die "usage: box add <module>..."
+  config_require
+  config_load
+  local m path
+  for m in "$@"; do module_path "$m" >/dev/null || die "no module named '$m' (see: box modules)"; done
+  start_log add "$@"
+  snapshot_create "before add $*"
+  for m in "$@"; do
+    path=$(module_path "$m")
+    step "add $m"
+    run_script "$path" module_install || die "module '$m' failed to install"
+    config_set BOX_MODULES "$(list_add "$m" "$BOX_MODULES")"
+    config_load
+    ok "$m installed and added to BOX_MODULES"
+  done
+}
+
+cmd_remove() {
+  need_root remove
+  (($#)) || die "usage: box remove <module>..."
+  config_require
+  config_load
+  start_log remove "$@"
+  snapshot_create "before remove $*"
+  local m path
+  for m in "$@"; do
+    step "remove $m"
+    if path=$(module_path "$m"); then
+      run_script "$path" module_remove || die "module '$m' failed to uninstall"
+    else
+      warn "no module file for '$m' — only removing it from box.conf"
+    fi
+    config_set BOX_MODULES "$(list_remove "$m" "$BOX_MODULES")"
+    config_load
+    ok "$m removed"
+  done
+}
+
+# --- config -----------------------------------------------------------------
+
+cmd_config() {
+  case ${1:-show} in
+    show) config_require; cat "$BOX_CONF" ;;
+    path) printf '%s\n' "$BOX_CONF" ;;
+    set)
+      need_root config set
+      [[ $# -eq 3 ]] || die "usage: box config set KEY VALUE"
+      config_require
+      config_set "$2" "$3"
+      ok "$2=\"$3\" — run 'sudo box apply' to make it so"
+      ;;
+    edit)
+      need_root config edit
+      config_require
+      "${EDITOR:-vi}" "$BOX_CONF"
+      bash -n "$BOX_CONF" || die "box.conf has a syntax error now — fix it before applying"
+      ok "saved — run 'sudo box apply' to make it so"
+      ;;
+    *) die "usage: box config [show|path|set KEY VALUE|edit]" ;;
+  esac
+}
+
+# --- snapshots --------------------------------------------------------------
+
+cmd_snapshot() {
+  need_root snapshot
+  snapshot_create "${*:-manual}"
+}
+
+cmd_snapshots() {
+  need_root snapshots
+  if snapper_ready; then
+    step "btrfs snapshots (restore files: snapper -c root undochange N..0 <path>)"
+    snapper --no-dbus -c root list
+  fi
+  if [[ -d /etc/.git ]]; then
+    step "/etc history (inspect: git -C /etc show <id>)"
+    git -C /etc log --format='%h  %ad  %s' --date=format:'%Y-%m-%d %H:%M' -n 20
+  fi
+}
+
+# --- update -----------------------------------------------------------------
+
+cmd_update() {
+  need_root update
+  if [[ -d $BOX_ROOT/.git ]]; then
+    log "updating box in $BOX_ROOT"
+    git -C "$BOX_ROOT" pull -q --ff-only || die "couldn't fast-forward $BOX_ROOT — local changes? (customise in /etc/box instead)"
+  fi
+  # Re-exec the (possibly new) box for the rest, so we never run a script
+  # that changed underneath us.
+  exec "$BOX_ROOT/bin/box" _update-rest
+}
+
+cmd_update_rest() {
+  need_root update
+  config_load
+  log "upgrading OS packages"
+  apt-get update -qq
+  apt-get -y -qq upgrade >/dev/null
+  cmd_apply
+  log "upgrading languages and npm-based agents (mise)"
+  as_user mise upgrade --yes >/dev/null || warn "mise upgrade had problems"
+  if list_has claude "$BOX_AGENTS"; then
+    as_user claude update >/dev/null 2>&1 || warn "claude update had problems"
+  fi
+  if list_has opencode "$BOX_AGENTS"; then
+    as_user opencode upgrade >/dev/null 2>&1 || warn "opencode upgrade had problems"
+  fi
+  ok "up to date"
+}
+
+# --- main -------------------------------------------------------------------
+
+main() {
+  local cmd=${1:-status}
+  (($#)) && shift
+  case $cmd in
+    status) cmd_status "$@" ;;
+    apply) cmd_apply ;;
+    update) cmd_update ;;
+    _update-rest) cmd_update_rest ;;
+    modules) cmd_modules ;;
+    add) cmd_add "$@" ;;
+    remove | rm) cmd_remove "$@" ;;
+    config) cmd_config "$@" ;;
+    snapshot) cmd_snapshot "$@" ;;
+    snapshots) cmd_snapshots ;;
+    version | --version | -v) printf 'box %s\n' "$BOX_VERSION" ;;
+    help | --help | -h) usage ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

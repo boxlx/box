@@ -1,0 +1,19 @@
+#cloud-config
+# box on a new VPS. Paste this as "user data" (a.k.a. cloud-init) when you
+# create the server — Hetzner, DigitalOcean, Vultr, Linode, AWS, … — choosing
+# Ubuntu 26.04 (or 24.04 / Debian 13) and adding your SSH key as usual.
+#
+# Fill in the optional values below. Setup finishes ~5 minutes after boot;
+# watch it with:  ssh root@<server-ip> tail -f /var/log/box.log
+#
+# Your provider's SSH key for root is copied to BOX_USER. Use a one-off,
+# pre-approved Tailscale key: user data stays readable on the server.
+runcmd:
+  - |
+    export BOX_USER=dev
+    export BOX_HOSTNAME=box
+    export BOX_TIMEZONE=                # optional, e.g. Europe/Berlin
+    export BOX_SSH_GITHUB_USER=         # optional: also import github.com/<you>.keys
+    export BOX_TAILSCALE_AUTHKEY=       # optional: tskey-auth-… to join your tailnet
+    export BOX_MODULES=                 # optional, e.g. "postgres redis"
+    curl -fsSL https://raw.githubusercontent.com/boxlx/box/main/install.sh | bash

@@ -1,0 +1,7 @@
+# Run from the repo root: shellcheck -x bin/box install.sh lib/*.sh core/*.sh modules/*.sh test/*.sh
+external-sources=true
+shell=bash
+# Core steps and modules share variables through lib/common.sh and box.conf.
+disable=SC2034
+# /etc/os-release and box.conf only exist on the target machine.
+disable=SC1091
