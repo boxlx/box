@@ -1,6 +1,15 @@
 # shellcheck shell=bash
 # Base packages, hostname and timezone.
 
+# Wait for other apt runs (unattended-upgrades on a fresh server) instead of
+# failing on the dpkg lock, and retry flaky downloads. install.sh writes the
+# same file before box exists.
+cat >/etc/apt/apt.conf.d/50box <<'APT'
+// Managed by box (core/10-system.sh).
+DPkg::Lock::Timeout "600";
+Acquire::Retries "5";
+APT
+
 apt-get update -qq
 apt_install \
   ca-certificates curl wget gnupg git sudo openssh-server \

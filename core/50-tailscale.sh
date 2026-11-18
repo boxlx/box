@@ -3,12 +3,7 @@
 
 if ! command -v tailscale >/dev/null; then
   # The upstream script traces every command (set -x); only show it on failure.
-  ts_log=$(mktemp)
-  if ! curl -fsSL https://tailscale.com/install.sh | sh >"$ts_log" 2>&1; then
-    cat "$ts_log" >&2
-    die "tailscale install failed"
-  fi
-  rm -f "$ts_log"
+  quietly sh -c 'curl -fsSL https://tailscale.com/install.sh | sh' || die "tailscale install failed"
   ok "tailscale installed"
 fi
 

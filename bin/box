@@ -151,8 +151,11 @@ cmd_status() {
   else row warn docker "installed, daemon not running"; fi
 
   if [[ $BOX_FIREWALL != yes ]]; then row warn firewall "disabled"
-  elif grep -qs '^ENABLED=yes' /etc/ufw/ufw.conf; then row ok firewall "ufw on"
-  else row warn firewall "ufw off"; fi
+  elif in_container; then row warn firewall "skipped (inside a container)"
+  elif ! grep -qs '^ENABLED=yes' /etc/ufw/ufw.conf; then row warn firewall "off — run: sudo box apply"
+  elif [[ $BOX_DOCKER == yes ]] && has_systemd && ! svc_active box-docker-firewall; then
+    row bad firewall "Docker ports aren't covered — run: sudo box apply"
+  else row ok firewall "public: ssh, mosh${BOX_PUBLIC_PORTS:+, $BOX_PUBLIC_PORTS} · tailnet: all"; fi
 
   if snapper_ready; then row ok snapshots "btrfs + /etc history"
   elif [[ -d /etc/.git ]]; then row ok snapshots "/etc history (no btrfs)"
@@ -305,7 +308,9 @@ cmd_update_rest() {
   config_load
   log "upgrading OS packages"
   apt-get update -qq
-  apt-get -y -qq upgrade >/dev/null
+  # needrestart restarts services still running old libraries (Ubuntu).
+  quietly env -u NEEDRESTART_SUSPEND NEEDRESTART_MODE=a apt-get -y -qq upgrade ||
+    die "OS upgrade failed — see the output above"
   cmd_apply
   log "upgrading languages and npm-based agents (mise)"
   as_user mise upgrade --yes >/dev/null || warn "mise upgrade had problems"

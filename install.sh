@@ -17,7 +17,7 @@ set -euo pipefail
 
 BOX_CONFIG_KEYS=(
   BOX_USER BOX_HOSTNAME BOX_TIMEZONE BOX_LANGS BOX_AGENTS BOX_MODULES BOX_DOCKER
-  BOX_FIREWALL BOX_SUDO_NOPASSWD BOX_SSH_PASSWORD_AUTH BOX_SSH_GITHUB_USER
+  BOX_FIREWALL BOX_PUBLIC_PORTS BOX_SUDO_NOPASSWD BOX_SSH_PASSWORD_AUTH BOX_SSH_GITHUB_USER
 )
 
 say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -33,8 +33,13 @@ main() {
     *) fail "unsupported OS '$os' — box runs on Ubuntu 24.04+ and Debian 12+" ;;
   esac
 
-  export DEBIAN_FRONTEND=noninteractive
+  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_SUSPEND=1
   say "preparing"
+  # A fresh server is often still running unattended-upgrades: wait for it
+  # instead of failing on the dpkg lock, and retry flaky downloads.
+  # (core/10-system.sh keeps this file.)
+  printf '%s\n' '// Managed by box (core/10-system.sh).' 'DPkg::Lock::Timeout "600";' 'Acquire::Retries "5";' \
+    >/etc/apt/apt.conf.d/50box
   apt-get update -qq
   apt-get install -y -qq --no-install-recommends git ca-certificates curl >/dev/null
 

@@ -26,7 +26,7 @@ for agent in $BOX_AGENTS; do
   case $agent in
     claude)
       if [[ ! -x $home/.local/bin/claude ]]; then
-        as_user bash -c 'curl -fsSL https://claude.ai/install.sh | bash' >/dev/null
+        quietly as_user bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
       fi
       report claude
       ;;
@@ -34,7 +34,7 @@ for agent in $BOX_AGENTS; do
     opencode)
       # Its npm package needs a postinstall script, which mise skips — use the official installer.
       if [[ ! -x $home/.opencode/bin/opencode ]]; then
-        as_user bash -c 'curl -fsSL https://opencode.ai/install | bash' >/dev/null
+        quietly as_user bash -c 'curl -fsSL https://opencode.ai/install | bash'
       fi
       report opencode
       ;;

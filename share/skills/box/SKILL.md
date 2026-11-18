@@ -14,6 +14,7 @@ undone.
    - **A setting, runtime or agent**: `sudo box config set KEY "value"`, then `sudo box apply`.
    - **A shipped module**: `sudo box add <name>`.
    - **Anything else that should persist**: write `/etc/box/modules/<name>.sh` from `/opt/box/modules/_template.sh`, then run `sudo box add <name>`.
+   - **A port the internet should reach** (only if the owner asked): add it to `BOX_PUBLIC_PORTS`, then apply. The owner's tailnet already reaches every port, Docker's included.
    - **Project-only**: do it in the project (`mise use`, `npm i`, `docker compose`) and leave box out of it.
 3. For risky changes, run `sudo box snapshot "before <what>"` first.
 4. Verify with `box status`. Tell the owner what changed and how to undo it.

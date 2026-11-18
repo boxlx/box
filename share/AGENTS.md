@@ -31,6 +31,7 @@ it, and is safe to run any number of times.
 | Add a project-only tool version | `mise use node@22` inside the project (writes `mise.toml`) |
 | Install a shipped module | `sudo box add postgres` (see `box modules`) |
 | Install something box has no module for | write `/etc/box/modules/<name>.sh` (below), then `sudo box add <name>` |
+| Open a port to the internet (owner asked) | `sudo box config set BOX_PUBLIC_PORTS "80 443"` → `sudo box apply` |
 | Change a setting | `sudo box config set KEY "value"` → `sudo box apply` |
 | Add or remove an agent | edit `BOX_AGENTS` (known: claude codex opencode gemini) → `sudo box apply` |
 | Make a restore point before something risky | `sudo box snapshot "before <thing>"` |
@@ -64,9 +65,9 @@ idempotent. Look at `/opt/box/modules/*.sh` for real examples.
 - **`/etc/box/box.conf`**: the settings. **`/etc/box/modules/`**: the owner's own modules.
 - **Users and tools**: `BOX_USER` owns the dev environment. Languages come from mise (`~/.config/mise/config.toml`, with shims in `~/.local/share/mise/shims`). Claude Code lives in `~/.local/bin` and OpenCode in `~/.opencode/bin`. npm-based agents are installed as `npm:` mise tools.
 - **Docker**: Docker Engine plus compose. `BOX_USER` is in the `docker` group.
-- **Network**: ufw denies inbound traffic except SSH (22), mosh (UDP 60000–61000) and anything arriving over `tailscale0`.
-  - **Ports published by Docker bypass ufw.** Publish as `127.0.0.1:3000:3000` (or on the Tailscale IP), never as bare `3000:3000`.
-  - To show a dev server to the owner, bind it to `0.0.0.0` (or the Tailscale IP) and give them the Tailscale address from `box status`.
+- **Network**: the internet can reach SSH (22) and mosh (UDP 60000–61000) only. The owner's tailnet (`tailscale0`) can reach every port. This covers ports published by Docker too (`-p 3000:3000`), which box filters in the `DOCKER-USER` chain because they skip ufw.
+  - To show a dev server or container to the owner, listen on `0.0.0.0` and give them the Tailscale address from `box status`. No firewall change is needed.
+  - To open a port to the whole internet (only when the owner asks): `sudo box config set BOX_PUBLIC_PORTS "80 443"` → `sudo box apply`. Don't use `ufw allow` or edit iptables by hand; `box apply` won't know about it.
 - **Restore points**: `/etc` is a git repo (etckeeper), and every apply, add and remove commits it. If `/` is btrfs, snapper also takes whole-filesystem snapshots. List them with `sudo box snapshots`, and restore a file with `sudo snapper -c root undochange <N>..0 <path>`.
 - **Logs**: everything box does goes to `/var/log/box.log`.
 - **Updates**: unattended-upgrades installs security updates daily. It never reboots on its own.

@@ -16,7 +16,7 @@ Then it gets out of the way, and you reshape it by asking your agent.
 curl -fsSL https://raw.githubusercontent.com/boxlx/box/main/install.sh | sudo bash
 ```
 
-> **Status: early (v0.1).** Installer smoke-tested end-to-end on Ubuntu 26.04 and Debian 13 (systemd containers, in CI). Not yet battle-tested on real hardware.
+> **Status: early (v0.1).** Tested end-to-end in CI on Ubuntu 26.04 and Debian 13, both in systemd containers and on real KVM VMs (firewall checked from outside, plus a reboot). Also tested by hand on a Debian 13 Google Cloud VM. The ISO is untested on real hardware.
 
 ## Why
 
@@ -46,7 +46,7 @@ box is that evening, written down once:
 | Dev | Docker Engine + compose, git, gh, build-essential, ripgrep, fd, fzf, jq, bat, btop |
 | Languages | [mise](https://mise.jdx.dev), default `node@lts bun@latest python@3` (anything mise supports) |
 | Agents | Claude Code, Codex, OpenCode (Gemini CLI optional), each pre-wired to read the box guide |
-| Safety | ufw (SSH, mosh and tailnet only), unattended security updates, etckeeper history of `/etc`, btrfs snapshots via snapper when `/` is btrfs |
+| Safety | firewall: the internet reaches SSH and mosh, your tailnet reaches everything, and Docker-published ports follow the same rule. Plus unattended security updates, etckeeper history of `/etc`, btrfs snapshots via snapper when `/` is btrfs |
 
 ## Install
 

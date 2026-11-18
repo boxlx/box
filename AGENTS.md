@@ -37,6 +37,7 @@ ships **to boxes** is `share/AGENTS.md`.)
 | `share/AGENTS.md`, `share/skills/box/` | installed onto boxes for their agents |
 | `cloud-init/`, `iso/` | other ways to start an install |
 | `test/smoke.sh` | end-to-end test in a systemd container |
+| `test/vm.sh` | end-to-end test on a real VM (KVM): firewall from outside, reboot |
 
 ## How steps and modules run
 
@@ -58,12 +59,14 @@ New config keys:
 ## Checks
 
 ```bash
-shellcheck -x bin/box install.sh lib/*.sh core/*.sh modules/*.sh test/*.sh
+shellcheck -x bin/box install.sh lib/*.sh core/*.sh modules/*.sh test/*.sh test/vm/*.sh
 test/smoke.sh ubuntu:26.04     # also: debian:13, ubuntu:24.04 (needs Docker, ~5 min)
+test/vm.sh ubuntu-26.04        # also: debian-13, ubuntu-24.04 (needs Docker + /dev/kvm)
 ```
 
-CI runs both on every push. A change isn't done until the smoke test passes
-on Ubuntu 26.04 and Debian 13.
+CI runs all three on every push. A change isn't done until the smoke test
+passes on Ubuntu 26.04 and Debian 13. Changes to SSH, the firewall, the
+network or boot also need `test/vm.sh`: containers skip all of those.
 
 ## Style
 

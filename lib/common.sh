@@ -11,6 +11,9 @@ BOX_STATE="${BOX_STATE:-/var/lib/box}"
 BOX_LOG="${BOX_LOG:-/var/log/box.log}"
 export BOX_ROOT BOX_ETC BOX_CONF BOX_STATE BOX_LOG
 export DEBIAN_FRONTEND=noninteractive
+# Ubuntu's needrestart reports after every apt install. box installs fresh
+# packages, so skip it; `box update` turns it back on for the OS upgrade.
+export NEEDRESTART_SUSPEND=1
 
 # --- output -----------------------------------------------------------------
 
@@ -26,6 +29,15 @@ step() { printf '\n%s## %s%s\n' "$_c_bold" "$*" "$_c_reset"; }
 ok()   { printf '  %s✓%s %s\n' "$_c_green" "$_c_reset" "$*"; }
 warn() { printf '  %s!%s %s\n' "$_c_yellow" "$_c_reset" "$*" >&2; }
 die()  { printf '%serror:%s %s\n' "$_c_red$_c_bold" "$_c_reset" "$*" >&2; exit 1; }
+
+# quietly CMD... — run CMD with its output hidden unless it fails. For
+# installers that print progress bars or trace every command.
+quietly() {
+  local out rc=0
+  out=$("$@" 2>&1) || rc=$?
+  ((rc == 0)) || printf '%s\n' "$out" >&2
+  return "$rc"
+}
 
 need_root() { [[ $EUID -eq 0 ]] || die "this needs root — try: sudo box $*"; }
 
@@ -130,6 +142,7 @@ config_defaults() {
   BOX_MODULES="${BOX_MODULES-}"
   BOX_DOCKER="${BOX_DOCKER:-yes}"
   BOX_FIREWALL="${BOX_FIREWALL:-yes}"
+  BOX_PUBLIC_PORTS="${BOX_PUBLIC_PORTS-}"
   BOX_SUDO_NOPASSWD="${BOX_SUDO_NOPASSWD:-yes}"
   BOX_SSH_PASSWORD_AUTH="${BOX_SSH_PASSWORD_AUTH:-auto}"
   BOX_SSH_GITHUB_USER="${BOX_SSH_GITHUB_USER:-}"
