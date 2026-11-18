@@ -32,10 +32,12 @@ fail() {
   exit 1
 }
 # vm CMD — run CMD in the VM as tester (over SSH from inside the container).
-vm() {
-  docker exec -i "$name" ssh -q -i /work/id -p 2222 -o BatchMode=yes -o ConnectTimeout=5 \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null tester@127.0.0.1 "$@"
-}
+# Every call has a deadline, so a stuck command fails instead of hanging CI.
+ssh_opts=(-q -i /work/id -p 2222 -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=5
+  -o ServerAliveCountMax=3 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
+vm() { timeout "${VM_CMD_TIMEOUT:-900}" docker exec "$name" ssh -n "${ssh_opts[@]}" tester@127.0.0.1 "$@"; }
+# vm_stdin CMD — the same, passing this script's stdin through (for uploads).
+vm_stdin() { timeout 300 docker exec -i "$name" ssh "${ssh_opts[@]}" tester@127.0.0.1 "$@"; }
 # outside PORT — fetch http://VM:PORT/ from outside the VM, as the internet would.
 outside() { docker exec "$name" curl -s -m 4 "http://127.0.0.1:$1/" 2>/dev/null || true; }
 # inside PORT — the same, from the VM itself.
@@ -82,7 +84,7 @@ vm 'cloud-init status --wait' >/dev/null 2>&1 || true
 pass "VM boots and takes SSH"
 
 echo "--- installing"
-docker exec "$name" tar -C /src --exclude=.git -cf - . | vm 'rm -rf ~/box-src && mkdir ~/box-src && tar -xf - -C ~/box-src'
+docker exec "$name" tar -C /src --exclude=.git -cf - . | vm_stdin 'rm -rf ~/box-src && mkdir ~/box-src && tar -xf - -C ~/box-src'
 start=$(date +%s)
 vm "sudo env BOX_LOCAL_SRC=\$HOME/box-src GITHUB_TOKEN='${GITHUB_TOKEN:-}' bash \$HOME/box-src/install.sh" ||
   fail "install.sh"
@@ -92,8 +94,12 @@ vm true || fail "SSH after the firewall went up"
 vm 'sudo sshd -T | grep -qx "passwordauthentication no"' || fail "SSH password login should be off"
 pass "SSH still works with the firewall on; password login is off"
 
+echo "--- firewall, seen from outside"
 # A host service and two Docker containers, each answering with a marker.
-vm 'mkdir -p ~/www && echo host-ok >~/www/index.html && (cd ~/www && setsid nohup python3 -m http.server 9000 </dev/null >/dev/null 2>&1 &)'
+# systemd-run starts the host one as its own service, detached from SSH.
+vm 'mkdir -p ~/www && echo host-ok >~/www/index.html' || fail "test page"
+vm 'sudo systemd-run --quiet --unit=box-test-web --working-directory=/home/tester/www python3 -m http.server 9000' ||
+  fail "start a test web server on the host"
 for port in 8080 8081; do
   vm "docker run -d -q --restart always --name web$port -p $port:$port busybox \
     sh -c 'mkdir /w && echo docker-$port-ok >/w/index.html && exec httpd -f -p $port -h /w'" >/dev/null ||
@@ -105,6 +111,7 @@ blocked 9000 host-ok || fail "a host port is reachable from outside"
 blocked 8080 docker-8080-ok || fail "a Docker-published port is reachable from outside"
 pass "from outside: host and Docker ports are blocked (locally they answer)"
 
+echo "--- BOX_PUBLIC_PORTS and BOX_FIREWALL"
 vm 'sudo box config set BOX_PUBLIC_PORTS "8081 9000/tcp"' >/dev/null
 apply "public ports"
 reachable outside 8081 docker-8081-ok || fail "BOX_PUBLIC_PORTS opens a Docker port"
