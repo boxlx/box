@@ -102,7 +102,7 @@ vm 'sudo systemd-run --quiet --unit=box-test-web --working-directory=/home/teste
   fail "start a test web server on the host"
 for port in 8080 8081; do
   vm "docker run -d -q --restart always --name web$port -p $port:$port busybox \
-    sh -c 'mkdir /w && echo docker-$port-ok >/w/index.html && exec httpd -f -p $port -h /w'" >/dev/null ||
+    sh -c 'mkdir -p /w && echo docker-$port-ok >/w/index.html && exec httpd -f -p $port -h /w'" >/dev/null ||
     fail "docker run on $port"
 done
 reachable inside 9000 host-ok || fail "host service answers locally"
